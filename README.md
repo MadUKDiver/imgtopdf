@@ -117,6 +117,29 @@ The application can be packaged using PyInstaller:
 pyinstaller --onefile --windowed --icon=imgtopdf.ico --add-data "imgtopdf.ico;." imgtopdf.py
 ```
 
+### Automated build (Windows)
+
+For convenience, a Windows build script is included. Simply double-click:
+
+```
+build.bat
+```
+
+The script automatically:
+
+- Creates a virtual environment.
+- Installs the required dependencies.
+- Generates the application icon.
+- Builds the standalone executable.
+
+Once completed, the executable can be found at:
+
+```
+dist\imgtopdf.exe
+```
+
+No manual PyInstaller commands are necessary.
+
 ---
 
 ## Technology
