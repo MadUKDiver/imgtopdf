@@ -138,6 +138,10 @@ imgtopdf is developed using:
 
 ---
 
+## Screenshot
+
+![imgtopdf main application](screenshots/imgtopdf-main.png)
+
 ## Licence
 
 See the repository licence file for licensing terms.
