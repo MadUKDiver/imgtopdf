@@ -4,7 +4,7 @@ title imgtopdf - Build
 
 echo.
 echo =====================================
-echo       imgtopdf v1.2 Windows Builder
+echo       imgtopdf v2.1 Windows Builder
 echo =====================================
 echo.
 
@@ -60,3 +60,4 @@ echo BUILD FAILED!
 echo Please check the error messages above.
 pause
 exit /b 1
+
