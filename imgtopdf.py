@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QDialog, QLineEdit, QPlainTextEdit
 )
 
-VERSION = "2.1"
+VERSION = "2.1.1"
 
 PAGE_SIZES = {
     "A1": (594, 841),
@@ -34,7 +34,7 @@ PAGE_SIZES = {
 }
 
 IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".bmp",
+    ".jpg", ".jpeg", ".jfif", ".png", ".bmp",
     ".tif", ".tiff", ".webp"
 }
 
@@ -847,7 +847,7 @@ class MainWindow(QMainWindow):
             self,
             "Select image files",
             start_directory,
-            "Image files (*.jpg *.jpeg *.png *.bmp "
+            "Image files (*.jpg *.jpeg *.jfif *.png *.bmp "
             "*.tif *.tiff *.webp)"
         )
 
@@ -1096,3 +1096,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
