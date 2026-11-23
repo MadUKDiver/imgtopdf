@@ -83,7 +83,7 @@ Selected image files are never remembered.
 
 ## Supported image formats
 
-- JPEG / JPG
+- JPEG / JPG / JFIF
 - PNG
 - BMP
 - TIFF / TIF
