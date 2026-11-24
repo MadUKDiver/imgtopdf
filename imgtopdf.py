@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QDialog, QLineEdit, QPlainTextEdit
 )
 
-VERSION = "2.1.1"
+VERSION = "2.1.2"
 
 PAGE_SIZES = {
     "A1": (594, 841),
@@ -108,6 +108,7 @@ def get_page_dimensions(image_width, image_height,
 
 
 def add_image_to_pdf(writer, filename, scale,
+                     horizontal, vertical,
                      orientation, page_size, rotation):
 
     # Check for transparency using Pillow.
@@ -191,6 +192,15 @@ def add_image_to_pdf(writer, filename, scale,
         orientation
     )
 
+    # Check whether the image will be cropped.
+    cropped = (
+        scale == "None"
+        and (
+            rotated_width > page_width
+            or rotated_height > page_height
+        )
+    )
+
     # Calculate scaling.
     if scale == "Stretch":
         draw_width = page_width
@@ -212,54 +222,95 @@ def add_image_to_pdf(writer, filename, scale,
     scale_x = draw_width / rotated_width
     scale_y = draw_height / rotated_height
 
+    # Calculate available positioning space.
+    horizontal_space = page_width - draw_width
+    vertical_space = page_height - draw_height
+
+    # Horizontal positioning.
+    if horizontal == "Left":
+        offset_x = 0
+
+    elif horizontal == "Centre":
+        offset_x = horizontal_space / 2
+
+    elif horizontal == "Right":
+        offset_x = horizontal_space
+
+    else:
+        offset_x = 0
+
+    # Vertical positioning.
+    # PDF coordinates originate at the bottom of the page.
+    if vertical == "Top":
+        offset_y = vertical_space
+
+    elif vertical == "Middle":
+        offset_y = vertical_space / 2
+
+    elif vertical == "Bottom":
+        offset_y = 0
+
+    else:
+        offset_y = vertical_space
+
     # Calculate the PDF transformation matrix.
     # Matrix format: (a, b, c, d, e, f)
 
     if angle == -90:
         # +90° clockwise
         matrix = (
-            0, -scale_y, scale_x, 0, page_width - draw_width, page_height
+            0, -scale_y,
+            scale_x, 0,
+            offset_x, offset_y + draw_height
         )
 
     elif angle == 90:
         # -90° anticlockwise
         matrix = (
-            0, scale_y, -scale_x, 0, draw_width, 0
+            0, scale_y,
+            -scale_x, 0,
+            offset_x + draw_width, offset_y
         )
 
     elif angle == 180:
         # 180°
         matrix = (
-            -scale_x, 0, 0, -scale_y, page_width, draw_height
+            -scale_x, 0,
+            0, -scale_y,
+            offset_x + draw_width, offset_y + draw_height
         )
 
     else:
         # No rotation
         matrix = (
-            scale_x, 0, 0, scale_y, 0, page_height - draw_height
+            scale_x, 0,
+            0, scale_y,
+            offset_x, offset_y
         )
 
     transformation = Transformation(ctm=matrix)
+
     # Create the correctly sized destination page.
     destination_page = writer.add_blank_page(
         width=page_width,
         height=page_height
     )
 
-    # Place  original or rotated image content on the page.
+    # Place original or rotated image content on the page.
     destination_page.merge_transformed_page(
         source_page,
         transformation
     )
 
+    return cropped
 
 def save_pdf(writer, filename):
     with open(filename, "wb") as output:
         writer.write(output)
 
 
-def convert_images(files, scale, merge_mode,
-                   orientation, page_size, rotation,
+def convert_images(files, scale, horizontal, vertical,
+                   merge_mode, orientation, page_size, rotation,
                    progress_callback=None):
 
     files = [
@@ -273,6 +324,7 @@ def convert_images(files, scale, merge_mode,
 
     results = []
     errors = []
+    cropped_files = []
 
     total = len(files)
 
@@ -284,18 +336,28 @@ def convert_images(files, scale, merge_mode,
             try:
                 writer = PdfWriter()
 
-                add_image_to_pdf(
+                cropped = add_image_to_pdf(
                     writer,
                     filename,
                     scale,
+                    horizontal,
+                    vertical,
                     orientation,
                     page_size,
                     rotation
                 )
 
-                output = unique_output_path(
-                    filename.with_suffix(".pdf")
-                )
+                if cropped:
+                    cropped_files.append(filename.name)
+
+                output_path = filename.with_suffix(".pdf")
+
+                if cropped:
+                    output_path = output_path.with_name(
+                        f"{output_path.stem}_cropped.pdf"
+                    )
+
+                output = unique_output_path(output_path)
 
                 save_pdf(writer, output)
                 results.append(str(output))
@@ -316,22 +378,25 @@ def convert_images(files, scale, merge_mode,
         # All images combined into one PDF.
         writer = PdfWriter()
         successful_pages = 0
-
-        output = unique_output_path(
-            files[0].with_suffix(".pdf")
-        )
+        merged_cropped = False
 
         for index, filename in enumerate(files):
 
             try:
-                add_image_to_pdf(
+                cropped = add_image_to_pdf(
                     writer,
                     filename,
                     scale,
+                    horizontal,
+                    vertical,
                     orientation,
                     page_size,
                     rotation
                 )
+
+                if cropped:
+                    cropped_files.append(filename.name)
+                    merged_cropped = True
 
                 successful_pages += 1
 
@@ -346,11 +411,20 @@ def convert_images(files, scale, merge_mode,
                     filename.name
                 )
 
+        output_path = files[0].with_suffix(".pdf")
+
+        if merged_cropped:
+            output_path = output_path.with_name(
+                f"{output_path.stem}_cropped.pdf"
+            )
+
+        output = unique_output_path(output_path)
+
         if successful_pages:
             save_pdf(writer, output)
             results.append(str(output))
 
-    return results, errors
+    return results, errors, cropped_files
 
 
 def unique_output_path(path):
@@ -375,7 +449,7 @@ def unique_output_path(path):
 
 class ConversionWorker(QObject):
     progress = Signal(int, str)
-    finished = Signal(list, list)
+    finished = Signal(list, list, list)
     failed = Signal(str)
 
     def __init__(self, files, settings):
@@ -385,9 +459,11 @@ class ConversionWorker(QObject):
 
     def run(self):
         try:
-            results, errors = convert_images(
+            results, errors, cropped_files = convert_images(
                 self.files,
                 self.settings["scale"],
+                self.settings["horizontal"],
+                self.settings["vertical"],
                 self.settings["merge"],
                 self.settings["orientation"],
                 self.settings["page_size"],
@@ -395,7 +471,7 @@ class ConversionWorker(QObject):
                 self.progress.emit
             )
 
-            self.finished.emit(results, errors)
+            self.finished.emit(results, errors, cropped_files)
 
         except Exception as error:
             self.failed.emit(str(error))
@@ -485,7 +561,7 @@ class FileListWidget(QListWidget):
 
 class CompletionDialog(QDialog):
 
-    def __init__(self, results, errors, parent=None):
+    def __init__(self, results, errors, cropped_files, parent=None):
         super().__init__(parent)
 
         self.setWindowTitle("Conversion completed")
@@ -535,6 +611,28 @@ class CompletionDialog(QDialog):
             layout.addWidget(error_details)
 
         buttons = QHBoxLayout()
+
+        if cropped_files:
+
+            cropped_label = QLabel(
+                f"{len(cropped_files)} image(s) were cropped "
+                f"because they exceeded the page dimensions."
+            )
+
+            cropped_label.setStyleSheet(
+                "color: #B07820; font-weight: bold;"
+            )
+
+            layout.addWidget(cropped_label)
+
+            cropped_details = QPlainTextEdit()
+            cropped_details.setReadOnly(True)
+            cropped_details.setPlainText(
+                "\n".join(cropped_files)
+            )
+            cropped_details.setMaximumHeight(90)
+
+            layout.addWidget(cropped_details)
 
         if self.output_folders:
 
@@ -594,12 +692,12 @@ class MainWindow(QMainWindow):
             self.add_files(initial_files)
 
     def load_settings(self):
-        """
-        Load saved settings, if available.
-        """
+        """ Load saved settings, if available. """
 
         defaults = {
             "scale": "Fit",
+            "horizontal": "Centre",
+            "vertical": "Top",
             "merge": "None",
             "orientation": "Auto",
             "page_size": "A4",
@@ -640,6 +738,8 @@ class MainWindow(QMainWindow):
 
         config["Settings"] = {
             "scale": self.scale_combo.currentText(),
+            "horizontal": self.h_combo.currentText(),
+            "vertical": self.v_combo.currentText(),
             "merge": self.merge_combo.currentText(),
             "orientation": self.orientation_combo.currentText(),
             "page_size": self.size_combo.currentText(),
@@ -741,6 +841,20 @@ class MainWindow(QMainWindow):
         self.scale_combo.addItems(["None", "Stretch", "Fit"])
         self.scale_combo.setCurrentText("Fit")
 
+        self.h_combo = QComboBox()
+        self.h_combo.addItems(["Left", "Centre", "Right"])
+        self.h_combo.setCurrentText("Centre")
+        self.v_combo = QComboBox()
+        self.v_combo.addItems(["Top", "Middle", "Bottom"])
+        self.v_combo.setCurrentText("Middle")
+
+        self.pos_layout = QHBoxLayout()
+        self.pos_layout.addWidget(QLabel("Horizontal:"))
+        self.pos_layout.addWidget(self.h_combo,1)
+        self.pos_layout.addSpacing(20)  # Optional gap between the two pairs
+        self.pos_layout.addWidget(QLabel("Vertical:"))
+        self.pos_layout.addWidget(self.v_combo,1)
+
         self.merge_combo = QComboBox()
         self.merge_combo.addItems([
             "None", "Ascending", "Descending", "Custom"
@@ -748,9 +862,7 @@ class MainWindow(QMainWindow):
         self.merge_combo.setCurrentText("None")
 
         self.orientation_combo = QComboBox()
-        self.orientation_combo.addItems([
-            "Auto", "Portrait", "Landscape"
-        ])
+        self.orientation_combo.addItems(["Auto", "Portrait", "Landscape"])
         self.orientation_combo.setCurrentText("Auto")
 
         self.rotation_combo = QComboBox()
@@ -767,6 +879,7 @@ class MainWindow(QMainWindow):
         self.remember_checkbox.setChecked(self.remember_enabled)
 
         settings_layout.addRow("Scale:", self.scale_combo)
+        settings_layout.addRow("Position:", self.pos_layout)
         settings_layout.addRow("Merge:", self.merge_combo)
         settings_layout.addRow("Orientation:", self.orientation_combo)
         settings_layout.addRow("Rotation:", self.rotation_combo)
@@ -777,6 +890,9 @@ class MainWindow(QMainWindow):
 
         # Now restore the saved dropdown selections.
         self.scale_combo.setCurrentText(self.saved_settings["scale"])
+        self.scale_combo.setCurrentText(self.saved_settings["scale"])
+        self.h_combo.setCurrentText(self.saved_settings["horizontal"])
+        self.v_combo.setCurrentText(self.saved_settings["vertical"])
         self.merge_combo.setCurrentText(self.saved_settings["merge"])
         self.orientation_combo.setCurrentText(self.saved_settings["orientation"])
         self.size_combo.setCurrentText(self.saved_settings["page_size"])
@@ -786,6 +902,8 @@ class MainWindow(QMainWindow):
 
         # Connect the dropdowns to automatic saving.
         self.scale_combo.currentTextChanged.connect(self.save_settings)
+        self.h_combo.currentTextChanged.connect(self.save_settings)
+        self.v_combo.currentTextChanged.connect(self.save_settings)
         self.merge_combo.currentTextChanged.connect(self.save_settings)
         self.orientation_combo.currentTextChanged.connect(self.save_settings)
         self.size_combo.currentTextChanged.connect(self.save_settings)
@@ -962,6 +1080,8 @@ class MainWindow(QMainWindow):
 
         settings = {
             "scale": self.scale_combo.currentText(),
+            "horizontal": self.h_combo.currentText(),
+            "vertical": self.v_combo.currentText(),
             "merge": self.merge_combo.currentText(),
             "orientation": self.orientation_combo.currentText(),
             "page_size": self.size_combo.currentText(),
@@ -1012,7 +1132,7 @@ class MainWindow(QMainWindow):
         self.remove_button.setEnabled(True)
         self.clear_button.setEnabled(True)
 
-    def conversion_finished(self, results, errors):
+    def conversion_finished(self, results, errors, cropped_files):
 
         self.enable_controls()
         self.progress.setValue(100)
@@ -1027,6 +1147,7 @@ class MainWindow(QMainWindow):
         dialog = CompletionDialog(
             results,
             errors,
+            cropped_files,
             self
         )
 
@@ -1057,9 +1178,11 @@ def main():
     # Direct EXE drop mode always uses the defaults.
     if supplied_files:
         try:
-            results, errors = convert_images(
+            results, errors, cropped_files = convert_images(
                 supplied_files,
                 scale="Fit",
+                horizontal="Centre",
+                vertical="Top",
                 merge_mode="None",
                 orientation="Auto",
                 page_size="A4",
@@ -1075,6 +1198,12 @@ def main():
                 message += (
                     f"\n\nFiles skipped: {len(errors)}\n"
                     + "\n".join(errors)
+                )
+
+            if cropped_files:
+                message += (
+                    f"\n\nImages cropped: {len(cropped_files)}\n"
+                    + "\n".join(cropped_files)
                 )
 
             QMessageBox.information(
@@ -1096,4 +1225,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
