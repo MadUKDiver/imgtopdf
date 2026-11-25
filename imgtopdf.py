@@ -17,10 +17,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QFileDialog, QProgressBar, QMessageBox,
     QGroupBox, QFormLayout, QAbstractItemView, QCheckBox,
-    QDialog, QLineEdit, QPlainTextEdit
+    QDialog, QPlainTextEdit
 )
 
-VERSION = "2.1.2"
+VERSION = "2.2"
 
 PAGE_SIZES = {
     "A1": (594, 841),
@@ -65,10 +65,13 @@ SETTINGS_FILE = SETTINGS_DIR / "settings.ini"
 def is_image(path):
     return Path(path).suffix.lower() in IMAGE_EXTENSIONS
 
-
+# Use key=lambda p: p.name.lower() to exclude file paths
 def natural_sort(files, merge_mode):
     if merge_mode == "Ascending":
-        return natsorted(files, key=lambda p: str(p).lower())
+        return natsorted(
+            files,
+            key=lambda p: str(p).lower()
+        )
 
     if merge_mode == "Descending":
         return natsorted(
@@ -477,51 +480,9 @@ class ConversionWorker(QObject):
             self.failed.emit(str(error))
 
 
-class DropArea(QLabel):
-    files_dropped = Signal(list)
-
-    def __init__(self):
-        super().__init__(
-            "DROP IMAGE FILES HERE\n\n"
-            "or use the Browse button below"
-        )
-
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumHeight(80)
-        self.setAcceptDrops(True)
-
-        self.setStyleSheet("""
-            QLabel {
-                border: 2px dashed #5599CC;
-                border-radius: 10px;
-                background-color: #F0F5FA;
-                color: #315A78;
-                font-size: 15px;
-                padding: 10px;
-            }
-        """)
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event):
-        files = []
-
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-
-            if os.path.isfile(path) and is_image(path):
-                files.append(path)
-
-        if files:
-            self.files_dropped.emit(files)
-
-        event.acceptProposedAction()
-
-
 class FileListWidget(QListWidget):
     files_reordered = Signal()
+    files_dropped = Signal(list)
 
     def __init__(self):
         super().__init__()
@@ -535,28 +496,149 @@ class FileListWidget(QListWidget):
         self.setDropIndicatorShown(True)
 
         self.setDragDropMode(
-            QAbstractItemView.DragDropMode.InternalMove
+            QAbstractItemView.DragDropMode.DragDrop
         )
 
         self.setDefaultDropAction(
             Qt.DropAction.MoveAction
         )
 
+        self.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #B0B0B0;
+                border-radius: 6px;
+                padding: 6px;
+            }
+        """)
+
+        # Empty-state overlay.
+        self.empty_label = QLabel(
+            "No images selected\n\n"
+            "Drag image files here or use Browse for files..."
+        )
+
+        self.empty_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+
+        self.empty_label.setStyleSheet("""
+            QLabel {
+                color: #888888;
+                font-size: 14px;
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        self.empty_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+
+        self.empty_label.setParent(self.viewport())
+
+        # Monitor changes to the list model.
+        self.model().rowsInserted.connect(
+            self.update_empty_label
+        )
+
+        self.model().rowsRemoved.connect(
+            self.update_empty_label
+        )
+
+        self.model().modelReset.connect(
+            self.update_empty_label
+        )
+
+        self.update_empty_label()
+
+    def update_empty_label(self, *args):
+
+        self.empty_label.setGeometry(
+            self.viewport().rect()
+        )
+
+        self.empty_label.setVisible(
+            self.count() == 0
+        )
+
+        self.empty_label.raise_()
+
+    def resizeEvent(self, event):
+
+        super().resizeEvent(event)
+        self.update_empty_label()
+
+    def showEvent(self, event):
+
+        super().showEvent(event)
+        self.update_empty_label()
+
+    def dragEnterEvent(self, event):
+
+        if event.mimeData().hasUrls():
+            # Files dragged from Windows Explorer.
+            event.acceptProposedAction()
+
+        elif event.source() == self:
+            # Internal file reordering.
+            event.acceptProposedAction()
+
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+
+        if event.mimeData().hasUrls():
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+
+        elif event.source() == self:
+            super().dragMoveEvent(event)
+
+        else:
+            event.ignore()
+
     def dropEvent(self, event):
-        original_order = [
-            self.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.count())
-        ]
 
-        super().dropEvent(event)
+        # External files dropped from Windows Explorer.
+        if event.mimeData().hasUrls():
 
-        new_order = [
-            self.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.count())
-        ]
+            files = []
 
-        if original_order != new_order:
-            self.files_reordered.emit()
+            for url in event.mimeData().urls():
+
+                path = url.toLocalFile()
+
+                if os.path.isfile(path) and is_image(path):
+                    files.append(path)
+
+            if files:
+                self.files_dropped.emit(files)
+
+            event.acceptProposedAction()
+            return
+
+        # Internal drag-and-drop reordering.
+        if event.source() == self:
+
+            original_order = [
+                self.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self.count())
+            ]
+
+            super().dropEvent(event)
+
+            new_order = [
+                self.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self.count())
+            ]
+
+            if original_order != new_order:
+                self.files_reordered.emit()
+
+            return
+
+        event.ignore()
 
 
 class CompletionDialog(QDialog):
@@ -672,7 +754,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"imgtopdf v{VERSION}")
         
-        self.setMinimumSize(540, 650)
+        self.setMinimumSize(540, 580)
+        self.resize(540, 600)
 
         self.files = []
         self.thread = None
@@ -796,10 +879,6 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(header_layout)
 
-        self.drop_area = DropArea()
-        self.drop_area.files_dropped.connect(self.add_files)
-        layout.addWidget(self.drop_area)
-
         browse_layout = QHBoxLayout()
 
         self.browse_button = QPushButton("Browse for files...")
@@ -827,6 +906,8 @@ class MainWindow(QMainWindow):
 
         self.file_list = FileListWidget()
         self.file_list.files_reordered.connect(self.on_files_reordered)
+        self.file_list.files_dropped.connect(self.add_files)
+        self.file_list.itemSelectionChanged.connect(self.update_buttons)
 
         layout.addWidget(self.file_list)
 
@@ -890,7 +971,6 @@ class MainWindow(QMainWindow):
 
         # Now restore the saved dropdown selections.
         self.scale_combo.setCurrentText(self.saved_settings["scale"])
-        self.scale_combo.setCurrentText(self.saved_settings["scale"])
         self.h_combo.setCurrentText(self.saved_settings["horizontal"])
         self.v_combo.setCurrentText(self.saved_settings["vertical"])
         self.merge_combo.setCurrentText(self.saved_settings["merge"])
@@ -905,6 +985,7 @@ class MainWindow(QMainWindow):
         self.h_combo.currentTextChanged.connect(self.save_settings)
         self.v_combo.currentTextChanged.connect(self.save_settings)
         self.merge_combo.currentTextChanged.connect(self.save_settings)
+        self.merge_combo.currentTextChanged.connect(self.apply_merge_order)
         self.orientation_combo.currentTextChanged.connect(self.save_settings)
         self.size_combo.currentTextChanged.connect(self.save_settings)
         self.rotation_combo.currentTextChanged.connect(self.save_settings)
@@ -934,6 +1015,7 @@ class MainWindow(QMainWindow):
 
         self.convert_button.clicked.connect(self.start_conversion)
         layout.addWidget(self.convert_button)
+        self.update_buttons()
 
     def add_files(self, files):
         for filename in files:
@@ -951,6 +1033,7 @@ class MainWindow(QMainWindow):
 
                 self.file_list.addItem(item)
 
+        self.apply_merge_order()
         self.update_count()
         self.reset_status()
 
@@ -989,6 +1072,22 @@ class MainWindow(QMainWindow):
         self.file_count.setText(
             f"Files selected: {len(self.files)}"
         )
+        self.update_buttons()
+
+    def update_buttons(self):
+
+        file_count = self.file_list.count()
+        selected_count = len(self.file_list.selectedItems())
+
+        # These require at least one file.
+        self.remove_button.setEnabled(file_count > 0)
+        self.clear_button.setEnabled(file_count > 0)
+
+        # These require at least two files AND a selection.
+        can_move = file_count > 1 and selected_count > 0
+
+        self.move_up_button.setEnabled(can_move)
+        self.move_down_button.setEnabled(can_move)
 
     def sync_files_from_list(self):
         """Keep self.files in the same order as the list widget."""
@@ -1070,6 +1169,42 @@ class MainWindow(QMainWindow):
         self.update_count()
         self.reset_status()
     
+    def apply_merge_order(self):
+
+        mode = self.merge_combo.currentText()
+
+        if mode not in ("Ascending", "Descending"):
+            return
+
+        # Remember selected files.
+        selected_files = {
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.file_list.selectedItems()
+        }
+
+        # Apply natural sorting.
+        self.files = natural_sort(self.files, mode)
+
+        # Rebuild the visible list.
+        self.file_list.clear()
+
+        for filename in self.files:
+
+            item = QListWidgetItem(Path(filename).name)
+
+            item.setData(
+                Qt.ItemDataRole.UserRole,
+                filename
+            )
+
+            self.file_list.addItem(item)
+
+            # Restore selection.
+            if filename in selected_files:
+                item.setSelected(True)
+
+        self.update_count()
+
     def start_conversion(self):
         if not self.files:
             QMessageBox.warning(
@@ -1127,10 +1262,7 @@ class MainWindow(QMainWindow):
     def enable_controls(self):
         self.convert_button.setEnabled(True)
         self.browse_button.setEnabled(True)
-        self.move_up_button.setEnabled(True)
-        self.move_down_button.setEnabled(True)
-        self.remove_button.setEnabled(True)
-        self.clear_button.setEnabled(True)
+        self.update_buttons()
 
     def conversion_finished(self, results, errors, cropped_files):
 
