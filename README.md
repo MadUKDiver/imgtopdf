@@ -163,7 +163,7 @@ imgtopdf is developed using:
 
 ## Screenshot
 
-![imgtopdf main application](screenshots/imgtopdf-main.png)
+![imgtopdf main application](screenshots/imgtopdf-main_v22.png)
 
 ## Licence
 
